@@ -219,7 +219,8 @@ class Workspace:
             self._global_step += 1
 
     def load_snapshot(self):
-        snapshot_base_dir = Path(self.cfg.snapshot_base_dir)
+        root_dir = os.path.dirname(os.path.realpath(__file__))
+        snapshot_base_dir = Path(os.path.join(root_dir, self.cfg.snapshot_base_dir))
         domain, _ = self.cfg.task.split('_', 1)
         snapshot_dir = snapshot_base_dir / self.cfg.obs_type / domain / self.cfg.agent.name
 
