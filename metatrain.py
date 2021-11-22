@@ -186,8 +186,8 @@ class Workspace:
         while train_until_step(self.global_step):
             # Select a sample of tasks
             replay_storage_dict = {}
-            replay_loaders_dict = {}
-            agents_dict = {}
+            replay_loader_dict = {}
+            agent_dict = {}
             for task in self.available_tasks:
                 task_step = 0
                 self.task_replay_storage = ReplayBufferStorage(self.data_specs, self.meta_specs,
@@ -268,11 +268,15 @@ class Workspace:
 
                 # assign each saved rollout to the task encoded dict
                 replay_storage_dict[task] = self.task_replay_storage
-                replay_loaders_dict[task] = self.task_replay_loader
-                agents_dict[task] = agent_clone
+                replay_loader_dict[task] = self.task_replay_loader
+                agent_dict[task] = agent_clone
                 print(f'Task is: {task}')
+            print(f'replay_storage_dict: {replay_storage_dict}')
+            print(f'replay_loader_dict: {replay_loader_dict}')
+            print(f'agent_dict: {agent_dict}')
 
-            # Update the overall agent policy using each cloned policy
+            # Update with MAML outer loop
+
 
 
     def load_snapshot(self):
