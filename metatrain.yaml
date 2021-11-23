@@ -18,6 +18,10 @@ num_task_frames: 10000
 # maml settings
 adapt_lr: 0.1
 meta_lr: 1.0
+#trpo outer optimization
+backtrack_factor: 0.5
+ls_max_steps: 15
+max_kl: 0.01
 
 # eval
 eval_every_frames: 10000
