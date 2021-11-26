@@ -20,8 +20,9 @@ import utils
 from logger import Logger
 from replay_buffer import ReplayBufferStorage, make_replay_loader
 from video import TrainVideoRecorder, VideoRecorder
-
+from tqdm import tqdm
 import learn2learn as l2l
+import cherry as ch
 
 torch.backends.cudnn.benchmark = True
 
@@ -32,6 +33,33 @@ def make_agent(obs_type, obs_spec, action_spec, num_expl_steps, cfg):
     cfg.action_shape = action_spec.shape
     cfg.num_expl_steps = num_expl_steps
     return hydra.utils.instantiate(cfg)
+
+
+# def compute_advantage(baseline, tau, gamma, rewards, dones, states, next_states):
+#     """
+#     Compute generalized advantage estimate
+#     """
+#     returns = ch.td.discount(gamma, rewards, dones)
+#     baseline.fit(states, returns)
+#     values = baseline(states)
+#     next_values = baseline(next_states)
+#     bootstraps = values * (1.0 - dones) + next_values * dones
+#     next_value = torch.zeros(1, device=values.device)
+#     return ch.pg.generalized_advantage(tau=tau,
+#                                        gamma=gamma,
+#                                        rewards=rewards,
+#                                        dones=dones,
+#                                        values=bootstraps,
+#                                        next_value=next_value)
+#
+#
+# def meta_surrogate_loss(replays, policies, policy, baseline, tau, gamma, adapt_lr):
+#     mean_loss = 0.0
+#     mean_kl = 0.0
+#     for task_replays, old_policy in tqdm(zip(replays, policies),
+#                                          total=len(replays),
+#                                          desc='Surrogate Loss',
+#                                          leave=False):
 
 
 class Workspace:
@@ -276,6 +304,11 @@ class Workspace:
             print(f'agent_dict: {agent_dict}')
 
             # Update with MAML outer loop
+            meta_policy = deepcopy(self.agent.actor)
+            update_dict = {}
+            for task in self.available_tasks:
+                policy = agent_dict[task].actor
+
 
 
 
