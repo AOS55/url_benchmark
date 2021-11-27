@@ -23,8 +23,10 @@ from video import TrainVideoRecorder, VideoRecorder
 from tqdm import tqdm
 import learn2learn as l2l
 import cherry as ch
+from cherry.models.robotics import LinearValue
 
 torch.backends.cudnn.benchmark = True
+from adaption import fast_adapt_a2c
 
 
 def make_agent(obs_type, obs_spec, action_spec, num_expl_steps, cfg):
@@ -33,33 +35,6 @@ def make_agent(obs_type, obs_spec, action_spec, num_expl_steps, cfg):
     cfg.action_shape = action_spec.shape
     cfg.num_expl_steps = num_expl_steps
     return hydra.utils.instantiate(cfg)
-
-
-# def compute_advantage(baseline, tau, gamma, rewards, dones, states, next_states):
-#     """
-#     Compute generalized advantage estimate
-#     """
-#     returns = ch.td.discount(gamma, rewards, dones)
-#     baseline.fit(states, returns)
-#     values = baseline(states)
-#     next_values = baseline(next_states)
-#     bootstraps = values * (1.0 - dones) + next_values * dones
-#     next_value = torch.zeros(1, device=values.device)
-#     return ch.pg.generalized_advantage(tau=tau,
-#                                        gamma=gamma,
-#                                        rewards=rewards,
-#                                        dones=dones,
-#                                        values=bootstraps,
-#                                        next_value=next_value)
-#
-#
-# def meta_surrogate_loss(replays, policies, policy, baseline, tau, gamma, adapt_lr):
-#     mean_loss = 0.0
-#     mean_kl = 0.0
-#     for task_replays, old_policy in tqdm(zip(replays, policies),
-#                                          total=len(replays),
-#                                          desc='Surrogate Loss',
-#                                          leave=False):
 
 
 class Workspace:
@@ -78,6 +53,8 @@ class Workspace:
         # MAML specific hyperparameters
         self.adapt_lr = cfg.adapt_lr
         self.meta_lr = cfg.meta_lr
+        self.gamma = cfg.gamma
+        self.tau = cfg.tau
 
         # get a group of tasks based on domain
         self.available_tasks = []
@@ -117,6 +94,10 @@ class Workspace:
         if cfg.snapshot_ts > 0:
             pretrained_agent = self.load_snapshot()['agent']
             self.agent.init_from(pretrained_agent)
+
+        # initialize baseline
+        self.baseline = LinearValue(self.train_envs[self.cfg.task].observation_spec().shape[0],
+                                    self.train_envs[self.cfg.task].action_spec().shape[0])
 
         # get meta specs
         self.meta_specs = self.agent.get_meta_specs()
@@ -216,6 +197,7 @@ class Workspace:
             replay_storage_dict = {}
             replay_loader_dict = {}
             agent_dict = {}
+            dones = []
             for task in self.available_tasks:
                 task_step = 0
                 self.task_replay_storage = ReplayBufferStorage(self.data_specs, self.meta_specs,
@@ -238,7 +220,7 @@ class Workspace:
                 self.task_replay_storage.add(time_step, meta)
                 video_clone.init(time_step.observation)
                 metrics = None
-                # train the specific task
+                # number of adaption steps
                 while train_task_until_step(task_step):
                     if time_step.last():
                         print(f'task_step: {task_step}')
@@ -266,7 +248,7 @@ class Workspace:
                         video_clone.init(time_step.observation)
                         episode_step = 0
                         episode_reward = 0
-
+                        dones.append(1)
                     # try to evaluate, don't if seed frames needed
                     if eval_every_step(task_step):
                         self.logger.log('eval_total_time', self.timer.total_time(), self.global_frame)
@@ -280,20 +262,23 @@ class Workspace:
                                                  self.global_step,
                                                  eval_mode=False)
 
-                    # update the cloned agent on the task
+                    # update the cloned agent on the task using A2C, this is the update step!
                     if not seed_until_step(task_step):
-                        metrics = agent_clone.update(self.task_replay_iter, self.global_step)
-                        self.logger.log_metrics(metrics, self.global_step, ty='train_episode')
+                        # metrics = agent_clone.update(self.task_replay_iter, self.global_step)
+                        # self.logger.log_metrics(metrics, self.global_step, ty='train_episode')
+                        agent_clone = fast_adapt_a2c(agent_clone, self.task_replay_iter, dones, self.adapt_lr,
+                                                     self.baseline, self.gamma, self.tau, meta, self.global_step)
+                        print('Completed Step of fast adapt')
 
                     # take env step
                     time_step = train_env.step(action)
                     episode_reward += time_step.reward
+                    dones.append(0)
                     self.task_replay_storage.add(time_step, meta)
                     video_clone.record(time_step.observation)
                     episode_step += 1
                     self._global_step += 1
                     task_step += 1
-
                 # assign each saved rollout to the task encoded dict
                 replay_storage_dict[task] = self.task_replay_storage
                 replay_loader_dict[task] = self.task_replay_loader
@@ -308,9 +293,6 @@ class Workspace:
             update_dict = {}
             for task in self.available_tasks:
                 policy = agent_dict[task].actor
-
-
-
 
     def load_snapshot(self):
         root_dir = os.path.dirname(os.path.realpath(__file__))
