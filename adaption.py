@@ -60,4 +60,4 @@ def fast_adapt_a2c(clone, replay_iter, dones, adapt_lr, baseline, gamma, tau, st
                               clone.actor.parameters(),
                               retain_graph=second_order,
                               create_graph=second_order)
-    return l2l.algorithms.maml.maml_update(clone, adapt_lr, gradients)
+    return l2l.algorithms.maml.maml_update(clone.actor, adapt_lr, gradients)
