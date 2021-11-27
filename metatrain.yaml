@@ -22,6 +22,9 @@ meta_lr: 1.0
 backtrack_factor: 0.5
 ls_max_steps: 15
 max_kl: 0.01
+# a2c inner optimization/adaption
+gamma: 0.95
+tau: 1.0
 
 # eval
 eval_every_frames: 10000
