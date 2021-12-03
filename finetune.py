@@ -187,6 +187,7 @@ class Workspace:
                                 self.global_frame)
                 self.eval()
 
+            print(f'agent type: {type(self.agent)}')
             meta = self.agent.update_meta(meta, self.global_step, time_step)
 
             if hasattr(self.agent, "regress_meta"):

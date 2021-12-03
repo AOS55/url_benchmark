@@ -27,6 +27,7 @@ from cherry.models.robotics import LinearValue
 
 torch.backends.cudnn.benchmark = True
 from adaption import fast_adapt_a2c
+from meta_trpo import meta_surrogate_loss
 
 
 def make_agent(obs_type, obs_spec, action_spec, num_expl_steps, cfg):
@@ -154,6 +155,105 @@ class Workspace:
             self._task_replay_iter = iter(self.task_replay_loader)
         return self._task_replay_iter
 
+    def adaption_train(self, task, dones, train, policy=None):
+
+        self.task_replay_storage = ReplayBufferStorage(self.data_specs, self.meta_specs,
+                                                       self.work_dir / 'buffer' / task)
+        self.task_replay_loader = make_replay_loader(self.task_replay_storage,
+                                                     self.cfg.replay_buffer_size,
+                                                     self.cfg.batch_size,
+                                                     self.cfg.replay_buffer_num_workers,
+                                                     False, self.cfg.nstep, self.cfg.discount)
+
+        l2l_agent = None  # set to none in case the agent is not updated
+        adapt_until_episode = utils.Until(self.cfg.num_adapt_episodes,
+                                          self.cfg.action_repeat)  # how many adaption episodes to train on
+        seed_until_step = utils.Until(self.cfg.num_seed_frames,
+                                      self.cfg.action_repeat)
+        eval_every_step = utils.Every(self.cfg.eval_every_frames,
+                                      self.cfg.action_repeat)
+        self._task_replay_iter = None
+        train_env = self.train_envs[task]
+        eval_env = self.eval_envs[task]
+        # setup env
+        agent_clone = deepcopy(self.agent)  # policy to use for task rollouts
+        video_clone = deepcopy(self.train_video_recorder)  # train_video_recorder clone
+        episode_step, episode_reward, num_episodes = 0, 0, 0
+        time_step = train_env.reset()
+        meta = agent_clone.init_meta()
+        self.task_replay_storage.add(time_step, meta)
+        video_clone.init(time_step.observation)
+        metrics = None
+        adapt_steps = 0
+        task_step = 0
+
+        if policy:
+            agent_clone.actor = policy
+
+        # complete adaption steps for each step
+        while adapt_steps <= self.cfg.adaption_steps:
+            # logging seperately if time_step is last
+            if time_step.last():
+                print(f'task_step: {task_step}')
+                self._global_episode += 1
+                video_clone.save(f'{task + str(self.global_frame)}.mp4')
+                # wait until all the metrics schema is populated
+                if metrics is not None:
+                    # log stats
+                    elapsed_time, total_time = self.timer.reset()
+                    episode_frame = episode_step * self.cfg.action_repeat
+                    with self.logger.log_and_dump_ctx(self.global_frame, ty='train') as log:
+                        log('fps', episode_frame / elapsed_time)
+                        log('total_time', total_time)
+                        log('episode_reward', episode_reward)
+                        log('episode_length', episode_frame)
+                        log('episode', self.global_episode)
+                        log('buffer_size', len(self.replay_storage))
+                        log('step', self.global_step)
+
+                # reset env
+                time_step = train_env.reset()
+                meta = agent_clone.init_meta()
+                self.task_replay_storage.add(time_step, meta)
+                video_clone.init(time_step.observation)
+                episode_step = 0
+                episode_reward = 0
+                num_episodes += 1
+                dones.append(1)
+            # try to evaluate, don't if seed frames needed
+            if eval_every_step(task_step):
+                self.logger.log('eval_total_time', self.timer.total_time(), self.global_frame)
+                self.eval_task(eval_env, agent_clone, video_clone)
+
+            meta = agent_clone.update_meta(meta, self.global_step, time_step)
+
+            with torch.no_grad(), utils.eval_mode(agent_clone):
+                action = agent_clone.act(time_step.observation,
+                                         meta,
+                                         self.global_step,
+                                         eval_mode=False)
+
+            # update the cloned agent on the task using A2C, this is the update step!
+            if not adapt_until_episode(num_episodes):
+                if train:
+                    l2l_agent = fast_adapt_a2c(agent_clone, self.task_replay_iter, dones, self.adapt_lr,
+                                               self.baseline, self.gamma, self.tau, meta, self.global_step)
+                adapt_steps += 1
+                print('Completed Step of fast adapt')
+
+            # take env step
+            time_step = train_env.step(action)
+            episode_reward += time_step.reward
+            dones.append(0)
+            self.task_replay_storage.add(time_step, meta)
+            video_clone.record(time_step.observation)
+            episode_step += 1
+            self._global_step += 1
+            task_step += 1
+            print(f'task step: {task_step}')
+        # assign each saved rollout to the task encoded dict
+        return self.task_replay_storage, self.task_replay_loader, l2l_agent
+
     def eval_task(self, eval_env, agent, video_recorder):
         step, episode, total_reward = 0, 0, 0
         eval_until_episode = utils.Until(self.cfg.num_eval_episodes)
@@ -185,114 +285,43 @@ class Workspace:
         # predicates
         train_until_step = utils.Until(self.cfg.num_train_frames,
                                        self.cfg.action_repeat)  # how long to train on all tasks
-        train_task_until_step = utils.Until(self.cfg.num_task_frames,
-                                            self.cfg.action_repeat)  # how long to train the task specific steps for
-        seed_until_step = utils.Until(self.cfg.num_seed_frames,
-                                      self.cfg.action_repeat)
-        eval_every_step = utils.Every(self.cfg.eval_every_frames,
-                                      self.cfg.action_repeat)
 
         while train_until_step(self.global_step):
             # Select a sample of tasks
             replay_storage_dict = {}
             replay_loader_dict = {}
+            replay_valid_storage_dict = {}
+            replay_valid_loader_dict = {}
             agent_dict = {}
             dones = []
             for task in self.available_tasks:
-                task_step = 0
-                self.task_replay_storage = ReplayBufferStorage(self.data_specs, self.meta_specs,
-                                                               self.work_dir / 'buffer' / task)
-                self.task_replay_loader = make_replay_loader(self.task_replay_storage,
-                                                             self.cfg.replay_buffer_size,
-                                                             self.cfg.batch_size,
-                                                             self.cfg.replay_buffer_num_workers,
-                                                             False, self.cfg.nstep, self.cfg.discount)
-                self._task_replay_iter = None
+                print(f'Task is: {task}')
 
-                train_env = self.train_envs[task]
-                eval_env = self.eval_envs[task]
-                # setup env
-                agent_clone = deepcopy(self.agent)  # policy to use for task rollouts
-                video_clone = deepcopy(self.train_video_recorder)  # train_video_recorder clone
-                episode_step, episode_reward = 0, 0
-                time_step = train_env.reset()
-                meta = agent_clone.init_meta()
-                self.task_replay_storage.add(time_step, meta)
-                video_clone.init(time_step.observation)
-                metrics = None
-                # number of adaption steps
-                while train_task_until_step(task_step):
-                    if time_step.last():
-                        print(f'task_step: {task_step}')
-                        self._global_episode += 1
-                        video_clone.save(f'{task + str(self.global_frame)}.mp4')
-                        # wait until all the metrics schema is populated
-                        if metrics is not None:
-                            # log stats
-                            elapsed_time, total_time = self.timer.reset()
-                            episode_frame = episode_step * self.cfg.action_repeat
-                            with self.logger.log_and_dump_ctx(self.global_frame, ty='train') as log:
-                                # log('task', task)
-                                log('fps', episode_frame / elapsed_time)
-                                log('total_time', total_time)
-                                log('episode_reward', episode_reward)
-                                log('episode_length', episode_frame)
-                                log('episode', self.global_episode)
-                                log('buffer_size', len(self.replay_storage))
-                                log('step', self.global_step)
+                self.task_replay_storage, self.task_replay_loader, l2l_agent = self.adaption_train(task, dones, True)
 
-                        # reset env
-                        time_step = train_env.reset()
-                        meta = agent_clone.init_meta()
-                        self.task_replay_storage.add(time_step, meta)
-                        video_clone.init(time_step.observation)
-                        episode_step = 0
-                        episode_reward = 0
-                        dones.append(1)
-                    # try to evaluate, don't if seed frames needed
-                    if eval_every_step(task_step):
-                        self.logger.log('eval_total_time', self.timer.total_time(), self.global_frame)
-                        self.eval_task(eval_env, agent_clone, video_clone)
-
-                    meta = agent_clone.update_meta(meta, self.global_step, time_step)
-
-                    with torch.no_grad(), utils.eval_mode(agent_clone):
-                        action = agent_clone.act(time_step.observation,
-                                                 meta,
-                                                 self.global_step,
-                                                 eval_mode=False)
-
-                    # update the cloned agent on the task using A2C, this is the update step!
-                    if not seed_until_step(task_step):
-                        # metrics = agent_clone.update(self.task_replay_iter, self.global_step)
-                        # self.logger.log_metrics(metrics, self.global_step, ty='train_episode')
-                        agent_clone = fast_adapt_a2c(agent_clone, self.task_replay_iter, dones, self.adapt_lr,
-                                                     self.baseline, self.gamma, self.tau, meta, self.global_step)
-                        print('Completed Step of fast adapt')
-
-                    # take env step
-                    time_step = train_env.step(action)
-                    episode_reward += time_step.reward
-                    dones.append(0)
-                    self.task_replay_storage.add(time_step, meta)
-                    video_clone.record(time_step.observation)
-                    episode_step += 1
-                    self._global_step += 1
-                    task_step += 1
-                # assign each saved rollout to the task encoded dict
                 replay_storage_dict[task] = self.task_replay_storage
                 replay_loader_dict[task] = self.task_replay_loader
-                agent_dict[task] = agent_clone
-                print(f'Task is: {task}')
+                agent_dict[task] = l2l_agent
+                self.task_replay_storage, self.task_replay_loader, l2l_agent = self.adaption_train(task, dones,
+                                                                                                   False, l2l_agent)
+                replay_valid_storage_dict[task] = self.task_replay_storage
+                replay_valid_loader_dict[task] = self.task_replay_loader
+
             print(f'replay_storage_dict: {replay_storage_dict}')
             print(f'replay_loader_dict: {replay_loader_dict}')
+            print(f'replay_valid_storage_dict: {replay_valid_storage_dict}')
+            print(f'replay_valid_loader_dict: {type(replay_valid_loader_dict)}')
             print(f'agent_dict: {agent_dict}')
-
+            # edit from here for meta_trpo
             # Update with MAML outer loop
             meta_policy = deepcopy(self.agent.actor)
             update_dict = {}
-            for task in self.available_tasks:
-                policy = agent_dict[task].actor
+
+            backtrack_factor = 0.5
+            ls_max_steps = 15
+            max_kl = 0.1
+            old_loss, old_kl = meta_surrogate_loss(replay_loader_dict, agent_dict, replay_valid_loader_dict,
+                                                   meta_policy, self.baseline, self.tau, self.gamma, self.adapt_lr)
 
     def load_snapshot(self):
         root_dir = os.path.dirname(os.path.realpath(__file__))

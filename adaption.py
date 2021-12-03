@@ -12,14 +12,9 @@ import learn2learn as l2l
 
 def compute_advantage(baseline, tau, gamma, rewards, dones, states, next_states):
     # Update baseline
-    print(len(rewards))
     dones = dones[-len(rewards):]
     dones = torch.as_tensor(dones, device=rewards.device)
     dones = dones.unsqueeze(1)
-
-    print(f'gamma: {gamma}')
-    print(f'rewards: {rewards.shape}')
-    print(f'dones: {dones.shape}')
     returns = ch.td.discount(gamma, rewards, dones)
     baseline.fit(states, returns)
     values = baseline(states)
@@ -36,9 +31,7 @@ def compute_advantage(baseline, tau, gamma, rewards, dones, states, next_states)
 
 def maml_a2c_loss(replay_iter, dones, learner, baseline, gamma, tau, meta, step):
     batch = next(replay_iter)
-    states, actions, extr_reward, discount, next_states, skills = utils.to_torch(
-        batch, learner.device
-    )
+    states, actions, extr_reward, discount, next_states, skills = utils.to_torch(batch, learner.device)
     with torch.no_grad():
         next_states = learner.aug_and_encode(next_states)
 
