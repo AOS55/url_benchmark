@@ -21,14 +21,10 @@ import utils
 from logger import Logger
 from replay_buffer import ReplayBufferStorage, make_replay_loader
 from video import TrainVideoRecorder, VideoRecorder
-from tqdm import tqdm
-import learn2learn as l2l
-import cherry as ch
 from cherry.algorithms import trpo
 from cherry.models.robotics import LinearValue
 
 from torch import autograd
-from torch.distributions.kl import kl_divergence
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
 torch.backends.cudnn.benchmark = True
@@ -163,20 +159,11 @@ class Workspace:
         return self._task_replay_iter
 
     def adaption_train(self, task, train, policy=None):
-
-        self.task_replay_storage = ReplayBufferStorage(self.data_specs, self.meta_specs,
-                                                       self.work_dir / 'buffer' / task)
-        self.task_replay_loader = make_replay_loader(self.task_replay_storage,
-                                                     self.cfg.replay_buffer_size,
-                                                     self.cfg.batch_size,
-                                                     self.cfg.replay_buffer_num_workers,
-                                                     False, self.cfg.nstep, self.cfg.discount)
-
+        time_step_list = []  # list of steps in episode
+        meta_list = []  # list of unsupervised meta values
         l2l_agent = None  # set to none in case the agent is not updated
         adapt_until_episode = utils.Until(self.cfg.num_adapt_episodes,
                                           self.cfg.action_repeat)  # how many adaption episodes to train on
-        # seed_until_step = utils.Until(self.cfg.num_seed_frames,
-        #                               self.cfg.action_repeat)
         eval_every_step = utils.Every(self.cfg.eval_every_frames,
                                       self.cfg.action_repeat)
         self._task_replay_iter = None
@@ -188,7 +175,8 @@ class Workspace:
         episode_step, episode_reward, num_episodes = 0, 0, 0
         time_step = train_env.reset()
         meta = agent_clone.init_meta()
-        self.task_replay_storage.add(time_step, meta)
+        time_step_list.append(time_step)
+        meta_list.append(meta)
         video_clone.init(time_step.observation)
         metrics = None
         adapt_steps = 0
@@ -198,10 +186,8 @@ class Workspace:
             agent_clone.actor = policy
 
         # complete adaption steps for each step
-        while adapt_steps <= self.cfg.adaption_steps:
-            # logging seperately if time_step is last
-            if time_step.last():
-                # print(f'task_step: {task_step}')
+        while True:
+            if time_step.done == 1.0:
                 self._global_episode += 1
                 video_clone.save(f'{task + str(self.global_frame)}.mp4')
                 # wait until all the metrics schema is populated
@@ -217,15 +203,11 @@ class Workspace:
                         log('episode', self.global_episode)
                         log('buffer_size', len(self.replay_storage))
                         log('step', self.global_step)
+                if train:
+                    l2l_agent = fast_adapt_a2c(agent_clone, time_step_list, meta_list, self.adapt_lr,
+                                               self.baseline, self.gamma, self.tau, self.global_step)
+                return time_step_list, meta_list, l2l_agent, agent_clone.aug_and_encode
 
-                # reset env
-                time_step = train_env.reset()
-                meta = agent_clone.init_meta()
-                self.task_replay_storage.add(time_step, meta)
-                video_clone.init(time_step.observation)
-                episode_step = 0
-                episode_reward = 0
-                num_episodes += 1
             # try to evaluate, don't if seed frames needed
             if eval_every_step(task_step):
                 self.logger.log('eval_total_time', self.timer.total_time(), self.global_frame)
@@ -233,35 +215,21 @@ class Workspace:
 
             meta = agent_clone.update_meta(meta, self.global_step, time_step)
 
+            # get the action
             with torch.no_grad(), utils.eval_mode(agent_clone):
                 action = agent_clone.act(time_step.observation,
                                          meta,
                                          self.global_step,
                                          eval_mode=False)
-
-            # update the cloned agent on the task using A2C, this is the update step!
-            if not adapt_until_episode(num_episodes):
-                if train:
-                    l2l_agent = fast_adapt_a2c(agent_clone, self.task_replay_iter, self.adapt_lr,
-                                               self.baseline, self.gamma, self.tau, meta, self.global_step)
-                # else:
-                #     # replay_iter = self.task_replay_iter
-                #     # _ = next(replay_iter)
-                #     continue
-                adapt_steps += 1
-                print('Completed Step of fast adapt')
-
             # take env step
             time_step = train_env.step(action)
             episode_reward += time_step.reward
-            self.task_replay_storage.add(time_step, meta)
+            time_step_list.append(time_step)
+            meta_list.append(meta)
             video_clone.record(time_step.observation)
             episode_step += 1
             self._global_step += 1
             task_step += 1
-            # print(f'task step: {task_step}')
-        # assign each saved rollout to the task encoded dict
-        return self.task_replay_storage, self.task_replay_loader, l2l_agent, agent_clone.aug_and_encode
 
     def eval_task(self, eval_env, agent, video_recorder):
         step, episode, total_reward = 0, 0, 0
@@ -297,50 +265,44 @@ class Workspace:
 
         while train_until_step(self.global_step):
             # Select a sample of tasks
-            replay_storage_dict = {}
-            replay_loader_dict = {}
-            replay_valid_storage_dict = {}
-            replay_valid_loader_dict = {}
+            time_step_dict = {}
+            meta_dict = {}
+            time_step_valid_dict = {}
+            meta_valid_dict = {}
             agent_dict = {}
             encode_dict = {}
             for task in self.available_tasks:
                 print(f'Task is: {task}')
 
-                self.task_replay_storage, self.task_replay_loader,\
-                    l2l_agent, aug_and_encode = self.adaption_train(task, True)
-
-                replay_storage_dict[task] = self.task_replay_storage
-                replay_loader_dict[task] = self.task_replay_loader
+                time_step_list, meta_list, l2l_agent, aug_and_encode = self.adaption_train(task, True)
+                time_step_dict[task] = time_step_list
+                meta_dict[task] = meta_list
                 agent_dict[task] = l2l_agent
                 encode_dict[task] = aug_and_encode
-                self.task_replay_storage, self.task_replay_loader,\
-                    _, _ = self.adaption_train(task, False, l2l_agent)
-                replay_valid_storage_dict[task] = self.task_replay_storage
-                replay_valid_loader_dict[task] = self.task_replay_loader
-
-            print(f'replay_storage_dict: {replay_storage_dict}')
-            print(f'replay_loader_dict: {replay_loader_dict}')
-            print(f'replay_valid_storage_dict: {replay_valid_storage_dict}')
-            print(f'replay_valid_loader_dict: {type(replay_valid_loader_dict)}')
-            print(f'agent_dict: {agent_dict}')
+                time_step_list, meta_list, l2l_agent, aug_and_encode = self.adaption_train(task, False, l2l_agent)
+                time_step_valid_dict[task] = time_step_list
+                meta_valid_dict[task] = meta_list
             # edit from here for meta_trpo
             # Update with MAML outer loop
             meta_policy = deepcopy(self.agent.actor)
-            update_dict = {}
-
             backtrack_factor = 0.5
             ls_max_steps = 15
             max_kl = 0.1
 
-            old_loss, old_kl = meta_surrogate_loss(replay_loader_dict,
+            # if self.device == 'cuda':
+            #     meta_policy = meta_policy.to(self.device, non_blocking=True)
+            #     self.baseline = self.baseline.to(self.device, non_blocking=True)
+
+            old_loss, old_kl = meta_surrogate_loss(time_step_dict, meta_dict,
                                                    agent_dict, encode_dict,
-                                                   replay_valid_loader_dict, meta_policy,
+                                                   time_step_valid_dict, meta_valid_dict, meta_policy,
                                                    self.baseline, self.tau, self.gamma, self.global_step,
-                                                   self.agent.device)
+                                                   self.agent.device, self.agent.stddev_schedule)
 
             grad = autograd.grad(old_loss,
-                                 meta_policy.paramaters(),
-                                 retain_graph=True)
+                                 meta_policy.parameters(),
+                                 retain_graph=True,
+                                 create_graph=True)
             grad = parameters_to_vector([g.detach() for g in grad])
             Fvp = trpo.hessian_vector_product(old_kl, meta_policy.paramaters())
             step = trpo.conjugate_gradient(Fvp, grad)
@@ -359,11 +321,11 @@ class Workspace:
                 clone = deepcopy(meta_policy)
                 for p, u in zip(clone.parameters(), step):
                     p.data.add_(-stepsize, u.data)
-                new_loss, kl = meta_surrogate_loss(replay_loader_dict,
+                new_loss, kl = meta_surrogate_loss(time_step_dict, meta_dict,
                                                    agent_dict, encode_dict,
-                                                   replay_valid_loader_dict, clone,
+                                                   time_step_valid_dict, meta_valid_dict, clone,
                                                    self.baseline, self.tau, self.gamma, self.global_step,
-                                                   self.device)
+                                                   self.device, self.agent.stddev_schedule)
                 if new_loss < old_loss and kl < max_kl:
                     for p, u in zip(meta_policy.parameters(), step):
                         p.data.add_(-stepsize, u.data)
