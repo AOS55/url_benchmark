@@ -222,8 +222,8 @@ class DDPGAgent:
             dist = self.actor(next_obs, stddev)
             next_action = dist.sample(clip=self.stddev_clip)
             target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
-            print(target_Q1)
-            print(target_Q2)
+            # print(target_Q1)
+            # print(target_Q2)
             target_V = torch.min(target_Q1, target_Q2)
             target_Q = reward + (discount * target_V)
 
