@@ -12,10 +12,8 @@ import learn2learn as l2l
 
 def compute_advantage(baseline, tau, gamma, rewards, dones, states, next_states):
     # Update baseline
-    # print(f'Length of dones: {len(dones)}')
-    # dones = dones[-len(rewards):]
-    # dones = torch.as_tensor(dones, device=rewards.device)
-    # dones = dones.unsqueeze(1)
+    rewards = torch.reshape(rewards, [len(rewards), 1])
+    dones = torch.reshape(dones, [len(dones), 1])
     returns = ch.td.discount(gamma, rewards, dones)
     baseline.fit(states, returns)
     values = baseline(states)
@@ -30,34 +28,37 @@ def compute_advantage(baseline, tau, gamma, rewards, dones, states, next_states)
                                        next_value=next_value)
 
 
-def maml_a2c_loss(replay_iter, learner, baseline, gamma, tau, meta, step):
-    batch = next(replay_iter)
+def maml_a2c_loss(time_step_list, meta_list, learner, baseline, gamma, tau, step):
     # print(utils.to_torch(batch, learner.device))
-    states, actions, extr_reward, discount, next_states, dones, skills = utils.to_torch(batch, learner.device)
-    # print(f'states: {states}, length: {len(states)}')
-    # print(f'actions: {actions}, length: {len(actions)}')
-    # print(f'extr_reward: {extr_reward}, length: {len(extr_reward)}')
-    # print(f'discount: {discount}, length: {len(discount)}')
-    # print(f'next_states: {next_states}, length: {len(next_states)}')
-    # print(f'dones: {dones}, length: {len(dones)}')
-    # print(f'skills: {skills}, length: {len(skills)}')
+
+    states = torch.tensor(np.array([item['observation'] for item in time_step_list[:-1]]),
+                          device=learner.device, dtype=torch.float64)
+    next_states = torch.tensor(np.array([item['observation'] for item in time_step_list[1:]]),
+                               device=learner.device, dtype=torch.float64)
+    actions = torch.tensor(np.array([item['action'] for item in time_step_list[:-1]]),
+                           device=learner.device, dtype=torch.float64)
+    extr_reward = torch.tensor(np.array([item['reward'] for item in time_step_list[:-1]]),
+                               device=learner.device, dtype=torch.float64)
+    skills = torch.tensor(np.array([item['skill'] for item in meta_list[:-1]]),
+                          device=learner.device, dtype=torch.float64)
+    dones = torch.tensor(np.array([item['done'] for item in time_step_list[:-1]]),
+                         device=learner.device, dtype=torch.float64)
     with torch.no_grad():
         next_states = learner.aug_and_encode(next_states)
 
     states = torch.cat([states, skills], dim=1)
     next_states = torch.cat([next_states, skills], dim=1)
     stddev = utils.schedule(learner.stddev_schedule, step)
-
-    dist = learner.actor(states.detach(), stddev)
+    dist = learner.actor(states.detach().to(torch.float32), stddev)
     log_probs = dist.log_prob(actions).mean(dim=1, keepdim=True)
     advantages = compute_advantage(baseline, tau, gamma, extr_reward, dones, states, next_states)
     advantages = ch.normalize(advantages).detach()
     return a2c.policy_loss(log_probs, advantages)
 
 
-def fast_adapt_a2c(clone, replay_iter, adapt_lr, baseline, gamma, tau, step, meta, first_order=False):
+def fast_adapt_a2c(clone, time_step_list, meta_list, adapt_lr, baseline, gamma, tau, step, first_order=False):
     second_order = not first_order
-    loss = maml_a2c_loss(replay_iter, clone, baseline, gamma, tau, meta, step)
+    loss = maml_a2c_loss(time_step_list, meta_list, clone, baseline, gamma, tau, step)
     gradients = autograd.grad(loss,
                               clone.actor.parameters(),
                               retain_graph=second_order,
