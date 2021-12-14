@@ -187,7 +187,7 @@ class Workspace:
                                 self.global_frame)
                 self.eval()
 
-            print(f'agent type: {type(self.agent)}')
+            # print(f'agent type: {type(self.agent)}')
             meta = self.agent.update_meta(meta, self.global_step, time_step)
 
             if hasattr(self.agent, "regress_meta"):
@@ -209,6 +209,7 @@ class Workspace:
             # try to update the agent
             if not seed_until_step(self.global_step):
                 metrics = self.agent.update(self.replay_iter, self.global_step)
+                print(f'Training at global_step: {self.global_step}')
                 self.logger.log_metrics(metrics, self.global_frame, ty='train')
 
             # take env step
