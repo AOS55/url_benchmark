@@ -124,11 +124,11 @@ class DIAYNAgent(DDPGAgent):
 
         # augment and encode
         obs = self.aug_and_encode(obs)
-        print(f'obs: {obs.shape}')
-        print(f'action: {type(action)}')
-        print(f'reward: {type(extr_reward)}')
-        print(f'next_obs: {type(next_obs)}')
-        print(f'skill: {type(skill)}')
+        # print(f'obs: {obs.shape}')
+        # print(f'action: {type(action)}')
+        # print(f'reward: {type(extr_reward)}')
+        # print(f'next_obs: {type(next_obs)}')
+        # print(f'skill: {type(skill)}')
         with torch.no_grad():
             next_obs = self.aug_and_encode(next_obs)
 
