@@ -8,8 +8,16 @@ import cherry as ch
 from cherry.algorithms import trpo
 
 
+def replay_list(replay_loader):
+    data_list = []
+    for data in replay_loader:
+        print(len(data))
+        data_list.append(data)
+    return data_list
+
+
 def meta_surrogate_loss(replay_dict, agent_dict, encode_dict, replay_valid_dict,
-                        policy, baseline, tau, gamma, step):
+                        policy, baseline, tau, gamma, step, device):
     mean_loss = 0.0
     mean_kl = 0.0
     for task in agent_dict:
@@ -19,14 +27,18 @@ def meta_surrogate_loss(replay_dict, agent_dict, encode_dict, replay_valid_dict,
         aug_and_encode = encode_dict[task]
         new_policy = deepcopy(policy)
 
+        print(f'task_replay.dataset: {task_replay.dataset}')
+        print(f'task_replay_valid.dataset: {task_replay_valid.dataset}')
+        task_replay_list = replay_list(task_replay)
+        print(task_replay_list)
         batch = next(iter(task_replay.dataset))
-        states, actions, extr_reward, discount, next_states, dones, skills = utils.to_torch(batch, task_agent.device)
+        states, actions, extr_reward, discount, next_states, dones, skills = utils.to_torch(batch, device)
         with torch.no_grad():
             next_states = aug_and_encode(next_states)
 
-        valid_batch = next(task_replay_valid)
+        valid_batch = next(iter(task_replay_valid))
         valid_states, valid_actions, valid_extr_reward, valid_discount, valid_next_states, valid_dones, valid_skills =\
-            utils.to_torch(valid_batch, task_agent.device)
+            utils.to_torch(valid_batch, device)
         with torch.no_grad():
             valid_next_states = aug_and_encode(valid_next_states)
 
