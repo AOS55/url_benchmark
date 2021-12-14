@@ -13,9 +13,9 @@ action_repeat: 1 # set to 2 for pixels
 discount: 0.99
 # train settings
 num_train_frames: 2000010
-num_seed_frames: 4000
-num_task_frames: 10000
-num_adapt_episodes: 20
+num_seed_frames: 1
+#num_task_frames: 10000
+num_adapt_episodes: 4
 adaption_steps: 1
 # maml settings
 adapt_lr: 0.1
@@ -29,7 +29,7 @@ gamma: 0.95
 tau: 1.0
 
 # eval
-eval_every_frames: 10000
+eval_every_frames: 3000
 num_eval_episodes: 10
 # pretrained
 snapshot_ts: 100000

@@ -175,8 +175,8 @@ class Workspace:
         l2l_agent = None  # set to none in case the agent is not updated
         adapt_until_episode = utils.Until(self.cfg.num_adapt_episodes,
                                           self.cfg.action_repeat)  # how many adaption episodes to train on
-        seed_until_step = utils.Until(self.cfg.num_seed_frames,
-                                      self.cfg.action_repeat)
+        # seed_until_step = utils.Until(self.cfg.num_seed_frames,
+        #                               self.cfg.action_repeat)
         eval_every_step = utils.Every(self.cfg.eval_every_frames,
                                       self.cfg.action_repeat)
         self._task_replay_iter = None
@@ -244,6 +244,10 @@ class Workspace:
                 if train:
                     l2l_agent = fast_adapt_a2c(agent_clone, self.task_replay_iter, self.adapt_lr,
                                                self.baseline, self.gamma, self.tau, meta, self.global_step)
+                # else:
+                #     # replay_iter = self.task_replay_iter
+                #     # _ = next(replay_iter)
+                #     continue
                 adapt_steps += 1
                 print('Completed Step of fast adapt')
 
@@ -331,7 +335,8 @@ class Workspace:
             old_loss, old_kl = meta_surrogate_loss(replay_loader_dict,
                                                    agent_dict, encode_dict,
                                                    replay_valid_loader_dict, meta_policy,
-                                                   self.baseline, self.tau, self.gamma, self.global_step)
+                                                   self.baseline, self.tau, self.gamma, self.global_step,
+                                                   self.agent.device)
 
             grad = autograd.grad(old_loss,
                                  meta_policy.paramaters(),
@@ -357,7 +362,8 @@ class Workspace:
                 new_loss, kl = meta_surrogate_loss(replay_loader_dict,
                                                    agent_dict, encode_dict,
                                                    replay_valid_loader_dict, clone,
-                                                   self.baseline, self.tau, self.gamma, self.global_step)
+                                                   self.baseline, self.tau, self.gamma, self.global_step,
+                                                   self.device)
                 if new_loss < old_loss and kl < max_kl:
                     for p, u in zip(meta_policy.parameters(), step):
                         p.data.add_(-stepsize, u.data)
