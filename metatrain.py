@@ -279,7 +279,7 @@ class Workspace:
                 meta_dict[task] = meta_list
                 agent_dict[task] = l2l_agent
                 encode_dict[task] = aug_and_encode
-                time_step_list, meta_list, l2l_agent, aug_and_encode = self.adaption_train(task, False, l2l_agent)
+                time_step_list, meta_list, _, _ = self.adaption_train(task, False, l2l_agent)
                 time_step_valid_dict[task] = time_step_list
                 meta_valid_dict[task] = meta_list
             # edit from here for meta_trpo
@@ -289,10 +289,6 @@ class Workspace:
             ls_max_steps = 15
             max_kl = 0.1
 
-            # if self.device == 'cuda':
-            #     meta_policy = meta_policy.to(self.device, non_blocking=True)
-            #     self.baseline = self.baseline.to(self.device, non_blocking=True)
-
             old_loss, old_kl = meta_surrogate_loss(time_step_dict, meta_dict,
                                                    agent_dict, encode_dict,
                                                    time_step_valid_dict, meta_valid_dict, meta_policy,
@@ -301,10 +297,9 @@ class Workspace:
 
             grad = autograd.grad(old_loss,
                                  meta_policy.parameters(),
-                                 retain_graph=True,
-                                 create_graph=True)
+                                 retain_graph=True)
             grad = parameters_to_vector([g.detach() for g in grad])
-            Fvp = trpo.hessian_vector_product(old_kl, meta_policy.paramaters())
+            Fvp = trpo.hessian_vector_product(old_kl, meta_policy.parameters())
             step = trpo.conjugate_gradient(Fvp, grad)
             shs = 0.5 * torch.dot(step, Fvp(step))
             lagrange_multiplier = torch.sqrt(shs / max_kl)
