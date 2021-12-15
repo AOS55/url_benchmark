@@ -325,6 +325,7 @@ class Workspace:
                     for p, u in zip(meta_policy.parameters(), step):
                         p.data.add_(-stepsize, u.data)
                     break
+            self.agent.actor = meta_policy
 
     def load_snapshot(self):
         root_dir = os.path.dirname(os.path.realpath(__file__))
