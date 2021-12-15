@@ -36,7 +36,7 @@ def meta_surrogate_loss(time_step_dict, meta_dict, agent_dict, encode_dict, time
         task_meta_valid_list = meta_valid_dict[task]
         task_agent = agent_dict[task]
         aug_and_encode = encode_dict[task]
-        new_policy = deepcopy(policy)
+        new_policy = l2l.clone_module(policy)
 
         states, next_states, actions, extr_reward, skills, dones = \
             unpack_replay_lists(task_time_step_list, task_meta_list, device)
@@ -58,7 +58,7 @@ def meta_surrogate_loss(time_step_dict, meta_dict, agent_dict, encode_dict, time
 
         new_dist = new_policy(valid_states.detach().to(torch.float32), stddev)
         old_dist = task_agent(states.detach().to(torch.float32), stddev)
-        kl = kl_divergence(new_dist, old_dist)
+        kl = kl_divergence(new_dist, old_dist).mean()
         mean_kl += kl
 
         # Compute surrogate loss
