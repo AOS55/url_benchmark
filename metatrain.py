@@ -49,10 +49,6 @@ class Workspace:
         utils.set_seed_everywhere(cfg.seed)
         self.device = torch.device(cfg.device)
 
-        self.logger = Logger(self.work_dir,
-                             use_tb=cfg.use_tb,
-                             use_wandb=cfg.use_wandb)
-
         # MAML specific hyperparameters
         self.adapt_lr = cfg.adapt_lr
         self.meta_lr = cfg.meta_lr
@@ -71,8 +67,10 @@ class Workspace:
         else:
             print(f'Domain: {cfg.domain} not recognized!')
 
+        self.logger_dict = {}
         self.train_envs = {}
         self.eval_envs = {}
+        self.task_episodes = {}
         for task in self.available_tasks:
             train_env = dmc.make(task, cfg.obs_type, cfg.frame_stack,
                                  cfg.action_repeat, cfg.seed)
@@ -80,6 +78,11 @@ class Workspace:
                                 cfg.action_repeat, cfg.seed)
             self.train_envs[task] = train_env
             self.eval_envs[task] = eval_env
+            self.logger_dict[task] = Logger(self.work_dir,
+                                            use_tb=cfg.use_tb,
+                                            task=task,
+                                            use_wandb=cfg.use_wandb)
+            self.task_episodes[task] = 0
 
         print(self.train_envs.items())
         # ensure that the obs and action spec are the same for all tasks on the environment
@@ -189,20 +192,19 @@ class Workspace:
         while True:
             if time_step.done == 1.0:
                 self._global_episode += 1
+                self.task_episodes[task] += 1
                 video_clone.save(f'{task + str(self.global_frame)}.mp4')
                 # wait until all the metrics schema is populated
-                if metrics is not None:
-                    # log stats
-                    elapsed_time, total_time = self.timer.reset()
-                    episode_frame = episode_step * self.cfg.action_repeat
-                    with self.logger.log_and_dump_ctx(self.global_frame, ty='train') as log:
-                        log('fps', episode_frame / elapsed_time)
-                        log('total_time', total_time)
-                        log('episode_reward', episode_reward)
-                        log('episode_length', episode_frame)
-                        log('episode', self.global_episode)
-                        log('buffer_size', len(self.replay_storage))
-                        log('step', self.global_step)
+                # log stats
+                elapsed_time, total_time = self.timer.reset()
+                episode_frame = episode_step * self.cfg.action_repeat
+                with self.logger_dict[task].log_and_dump_ctx(self.task_episodes[task], ty='train') as log:
+                    log('fps', episode_frame / elapsed_time)
+                    log('total_time', total_time)
+                    log('episode_reward', episode_reward)
+                    log('episode_length', episode_frame)
+                    log('episode', self.global_episode)
+                    log('step', self.global_step)
                 if train:
                     l2l_agent = fast_adapt_a2c(agent_clone, time_step_list, meta_list, self.adapt_lr,
                                                self.baseline, self.gamma, self.tau, self.global_step)
@@ -210,8 +212,8 @@ class Workspace:
 
             # try to evaluate, don't if seed frames needed
             if eval_every_step(task_step):
-                self.logger.log('eval_total_time', self.timer.total_time(), self.global_frame)
-                self.eval_task(eval_env, agent_clone, video_clone)
+                self.logger_dict[task].log('eval_total_time', self.timer.total_time(), self.global_frame)
+                self.eval_task(eval_env, agent_clone, video_clone, task)
 
             meta = agent_clone.update_meta(meta, self.global_step, time_step)
 
@@ -231,7 +233,7 @@ class Workspace:
             self._global_step += 1
             task_step += 1
 
-    def eval_task(self, eval_env, agent, video_recorder):
+    def eval_task(self, eval_env, agent, video_recorder, task):
         step, episode, total_reward = 0, 0, 0
         eval_until_episode = utils.Until(self.cfg.num_eval_episodes)
         meta = agent.init_meta()
@@ -252,10 +254,10 @@ class Workspace:
             episode += 1
             video_recorder.save(f'{self.global_frame}.mp4')
 
-        with self.logger.log_and_dump_ctx(self.global_frame, ty='eval') as log:
+        with self.logger_dict[task].log_and_dump_ctx(self.task_episodes[task], ty='eval') as log:
             log('episode_reward', total_reward / episode)
             log('episode_length', step * self.cfg.action_repeat / episode)
-            log('episode', self.global_episode)
+            log('episode', self.task_episodes[task])
             log('step', self.global_step)
 
     def train(self):
@@ -273,7 +275,6 @@ class Workspace:
             encode_dict = {}
             for task in self.available_tasks:
                 print(f'Task is: {task}')
-
                 time_step_list, meta_list, l2l_agent, aug_and_encode = self.adaption_train(task, True)
                 time_step_dict[task] = time_step_list
                 meta_dict[task] = meta_list
