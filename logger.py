@@ -127,7 +127,7 @@ class MetersGroup(object):
 
 
 class Logger(object):
-    def __init__(self, log_dir, use_tb, use_wandb):
+    def __init__(self, log_dir, use_tb, use_wandb, task=None):
         self._log_dir = log_dir
         self._train_mg = MetersGroup(log_dir / 'train.csv',
                                      formating=COMMON_TRAIN_FORMAT,
@@ -136,7 +136,7 @@ class Logger(object):
                                     formating=COMMON_EVAL_FORMAT,
                                     use_wandb=use_wandb)
         if use_tb:
-            self._sw = SummaryWriter(str(log_dir / 'tb'))
+            self._sw = SummaryWriter(str(log_dir / 'tb' / task))
         else:
             self._sw = None
         self.use_wandb = use_wandb
