@@ -30,7 +30,7 @@ tau: 1.0
 
 # eval
 eval_every_frames: 3000
-num_eval_episodes: 10
+num_eval_episodes: 1
 # pretrained
 snapshot_ts: 100000
 snapshot_base_dir: pretrained_models
