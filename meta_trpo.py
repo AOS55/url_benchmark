@@ -56,6 +56,8 @@ def meta_surrogate_loss(time_step_dict, meta_dict, agent_dict, encode_dict, time
 
         stddev = utils.schedule(schedule, step)  # TODO: Needs to match an appropriate schedule
 
+        stddev = 1.0
+
         new_dist = new_policy(valid_states.detach().to(torch.float32), stddev)
         old_dist = task_agent(states.detach().to(torch.float32), stddev)
         kl = kl_divergence(new_dist, old_dist).mean()

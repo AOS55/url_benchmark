@@ -49,6 +49,9 @@ def maml_a2c_loss(time_step_list, meta_list, learner, baseline, gamma, tau, step
     states = torch.cat([states, skills], dim=1)
     next_states = torch.cat([next_states, skills], dim=1)
     stddev = utils.schedule(learner.stddev_schedule, step)
+
+    stddev = 1.0
+
     dist = learner.actor(states.detach().to(torch.float32), stddev)
     log_probs = dist.log_prob(actions).mean(dim=1, keepdim=True)
     advantages = compute_advantage(baseline, tau, gamma, extr_reward, dones, states, next_states)
