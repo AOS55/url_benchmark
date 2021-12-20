@@ -82,6 +82,10 @@ class Workspace:
                                             use_tb=cfg.use_tb,
                                             task=task,
                                             use_wandb=cfg.use_wandb)
+            self.logger_outer = Logger(self.work_dir,
+                                       use_tb=cfg.use_tb,
+                                       task='meta',
+                                       use_wandb=cfg.use_wandb)
             self.task_episodes[task] = 0
 
         print(self.train_envs.items())
@@ -136,6 +140,7 @@ class Workspace:
         self.timer = utils.Timer()
         self._global_step = 0
         self._global_episode = 0
+        self.meta_steps = 0
 
     @property
     def global_step(self):
@@ -273,6 +278,7 @@ class Workspace:
             meta_valid_dict = {}
             agent_dict = {}
             encode_dict = {}
+            reward_list = []
             for task in self.available_tasks:
                 print(f'Task is: {task}')
                 time_step_list, meta_list, l2l_agent, aug_and_encode = self.adaption_train(task, True)
@@ -283,12 +289,15 @@ class Workspace:
                 time_step_list, meta_list, _, _ = self.adaption_train(task, False, l2l_agent)
                 time_step_valid_dict[task] = time_step_list
                 meta_valid_dict[task] = meta_list
+                # total_reward for logging
+                reward_list.append(np.array(([item['reward'] for item in time_step_list[:-1]])).sum())
             # edit from here for meta_trpo
             # Update with MAML outer loop
             meta_policy = deepcopy(self.agent.actor)
             backtrack_factor = 0.5
-            ls_max_steps = 15
+            ls_max_steps = 40
             max_kl = 0.1
+            self.logger_outer.log('train_adaption_reward', np.array(reward_list).mean(), self.meta_steps)
 
             old_loss, old_kl = meta_surrogate_loss(time_step_dict, meta_dict,
                                                    agent_dict, encode_dict,
@@ -323,9 +332,13 @@ class Workspace:
                                                    self.baseline, self.tau, self.gamma, self.global_step,
                                                    self.device, self.agent.stddev_schedule)
                 if new_loss < old_loss and kl < max_kl:
+                    self.logger_outer.log('train_loss_new', new_loss, self.meta_steps)
                     for p, u in zip(meta_policy.parameters(), step):
                         p.data.add_(-stepsize, u.data)
                     break
+            print(f'meta_steps: {self.meta_steps}, loss: {old_loss}')
+            self.logger_outer.log('train_loss', old_loss, self.meta_steps)
+            self.meta_steps += 1
             self.agent.actor = meta_policy
 
     def load_snapshot(self):
