@@ -296,14 +296,14 @@ class Workspace:
             meta_policy = deepcopy(self.agent.actor)
             backtrack_factor = 0.5
             ls_max_steps = 40
-            max_kl = 0.1
+            max_kl = 0.5
             self.logger_outer.log('train_adaption_reward', np.array(reward_list).mean(), self.meta_steps)
 
             old_loss, old_kl = meta_surrogate_loss(time_step_dict, meta_dict,
                                                    agent_dict, encode_dict,
                                                    time_step_valid_dict, meta_valid_dict, meta_policy,
                                                    self.baseline, self.tau, self.gamma, self.global_step,
-                                                   self.agent.device, self.agent.stddev_schedule)
+                                                   self.device, self.agent.stddev_schedule)
 
             grad = autograd.grad(old_loss,
                                  meta_policy.parameters(),
@@ -333,6 +333,7 @@ class Workspace:
                                                    self.device, self.agent.stddev_schedule)
                 if new_loss < old_loss and kl < max_kl:
                     self.logger_outer.log('train_loss_new', new_loss, self.meta_steps)
+                    print(f'new_loss: {new_loss} < old_loss: {old_loss} and kl: {kl} < {max_kl}')
                     for p, u in zip(meta_policy.parameters(), step):
                         p.data.add_(-stepsize, u.data)
                     break
@@ -340,6 +341,7 @@ class Workspace:
             self.logger_outer.log('train_loss', old_loss, self.meta_steps)
             self.meta_steps += 1
             self.agent.actor = meta_policy
+            print(torch.cuda.memory_summary(self.device))
 
     def load_snapshot(self):
         root_dir = os.path.dirname(os.path.realpath(__file__))
