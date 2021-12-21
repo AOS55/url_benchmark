@@ -1,5 +1,4 @@
 import learn2learn as l2l
-from copy import deepcopy
 import utils
 import torch
 from torch.distributions.kl import kl_divergence

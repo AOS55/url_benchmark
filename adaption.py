@@ -3,9 +3,6 @@ import numpy as np
 import torch
 from cherry.algorithms import a2c
 from torch import autograd
-from torch.distributions.kl import kl_divergence
-from torch.nn.utils import parameters_to_vector, vector_to_parameters
-from tqdm import tqdm
 import utils
 import learn2learn as l2l
 
@@ -59,7 +56,7 @@ def maml_a2c_loss(time_step_list, meta_list, learner, baseline, gamma, tau, step
     return a2c.policy_loss(log_probs, advantages)
 
 
-def fast_adapt_a2c(clone, time_step_list, meta_list, adapt_lr, baseline, gamma, tau, step, first_order=False):
+def fast_adapt_a2c(clone, time_step_list, meta_list, adapt_lr, baseline, gamma, tau, step, first_order=True):
     second_order = not first_order
     loss = maml_a2c_loss(time_step_list, meta_list, clone, baseline, gamma, tau, step)
     gradients = autograd.grad(loss,

@@ -213,7 +213,10 @@ class Workspace:
                 if train:
                     l2l_agent = fast_adapt_a2c(agent_clone, time_step_list, meta_list, self.adapt_lr,
                                                self.baseline, self.gamma, self.tau, self.global_step)
-                return time_step_list, meta_list, l2l_agent, agent_clone.aug_and_encode
+                del video_clone
+                aug_and_enc = agent_clone.aug_and_encode
+                del agent_clone
+                return time_step_list, meta_list, l2l_agent, aug_and_enc
 
             # try to evaluate, don't if seed frames needed
             if eval_every_step(task_step):
@@ -341,7 +344,15 @@ class Workspace:
             self.logger_outer.log('train_loss', old_loss, self.meta_steps)
             self.meta_steps += 1
             self.agent.actor = meta_policy
-            print(torch.cuda.memory_summary(self.device))
+            torch.cuda.empty_cache()
+            del meta_list
+            del agent_dict
+            del meta_policy
+            del old_loss
+            del new_loss
+            del kl
+            del step, step_
+            torch.cuda.empty_cache()
 
     def load_snapshot(self):
         root_dir = os.path.dirname(os.path.realpath(__file__))
