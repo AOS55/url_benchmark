@@ -2,3 +2,4 @@ __pycache__
 exp_local/*
 rerun_snapshot/*
 .idea
+models/*
