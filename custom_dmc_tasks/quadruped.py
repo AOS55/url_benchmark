@@ -330,6 +330,7 @@ def _common_observations(physics):
   obs['torso_upright'] = physics.torso_upright()
   obs['imu'] = physics.imu()
   obs['force_torque'] = physics.force_torque()
+  obs['torso_position'] = physics.named.data.geom_xpos['torso']
   return obs
 
 
