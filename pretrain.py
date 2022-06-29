@@ -211,6 +211,11 @@ class Workspace:
                 metrics = self.agent.update(self.replay_iter, self.global_step)
                 self.logger.log_metrics(metrics, self.global_frame, ty='train')
 
+            # obs_cpu = time_step.observation.copy()
+            # # print(f"obs_cpu.shape: {obs_cpu.shape}")
+            # with open("obs.csv","a") as f:
+            #     np.savetxt(f, obs_cpu[np.newaxis], delimiter=",")
+
             # take env step
             time_step = self.train_env.step(action)
             episode_reward += time_step.reward
