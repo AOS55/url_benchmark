@@ -43,8 +43,10 @@ class DADSAgent(DDPGAgent):
         # create actor and critic
         super().__init__(**kwargs)
 
+        self.obs_dim = 2
+        # TODO: Check input network dimensions
         # create dads
-        self.dads = DADS(self.obs_dim - self.skill_dim, self.skill_dim,
+        self.dads = DADS(self.obs_dim, self.skill_dim,
                          kwargs['hidden_dim']).to(kwargs['device'])
 
         # loss criterion
@@ -130,13 +132,13 @@ class DADSAgent(DDPGAgent):
         # augment and encode
         obs = self.aug_and_encode(obs)
         next_obs = self.aug_and_encode(next_obs)
-
+        
         if self.reward_free:
-            metrics.update(self.update_dads(skill, obs, next_obs, step))
+            # TODO: Look at urlb state obs vs dads obs
+            metrics.update(self.update_dads(skill, obs[:, -3:-1], next_obs[:, -3:-1], step))
 
             with torch.no_grad():
-                intr_reward = self.compute_intr_reward(skill, obs, next_obs, step)
-            # TODO: Look at urlb state obs vs dads obs
+                intr_reward = self.compute_intr_reward(skill, obs[:, -3:-1], next_obs[:, -3:-1], step)
             if self.use_tb or self.use_wandb:
                 metrics['intr_reward'] = intr_reward.mean().item()
             reward = intr_reward
