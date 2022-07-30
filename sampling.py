@@ -109,6 +109,33 @@ class Workspace:
             self._replay_iter = iter(self.replay_loader)
         return self._replay_iter
     
+    def eval(self):
+        step, episode, total_reward = 0, 0, 0
+        eval_until_episode = utils.Until(self.cfg.num_eval_episodes)
+        meta = self.agent.init_meta()
+        while eval_until_episode(episode):
+            time_step = self.eval_env.reset()
+            self.video_recorder.init(self.eval_env, enabled=(episode == 0))
+            while not time_step.last():
+                with torch.no_grad(), utils.eval_mode(self.agent):
+                    action = self.agent.act(time_step.observation,
+                                            meta,
+                                            self.global_step,
+                                            eval_mode=True)
+                time_step = self.eval_env.step(action)
+                self.video_recorder.record(self.eval_env)
+                total_reward += time_step.reward
+                step += 1
+            
+            episode += 1
+            self.video_recorder.save(f'{self.global_frame}.mp4')
+        
+        with self.logger.log_and_dump_ctx(self.global_frame, ty='eval') as log:
+            log('episode_reward', total_reward / episode)
+            log('episode_length', step * self.cfg.action_repeat / episode) 
+            log('episode', self.global_episode)
+            log('step', self.global_step)
+
     def train(self):
         # predicates
         train_until_step = utils.Until(self.cfg.num_train_frames,
@@ -125,6 +152,7 @@ class Workspace:
         metrics = None
         while train_until_step(self.global_step):
             if time_step.last():
+                print(f'time_step is last')
                 self._global_episode += 1
                 self.train_video_recorder.save(f'{self.global_frame}.mp4')
                 # wait until all the metrics schema is populated
@@ -148,7 +176,41 @@ class Workspace:
 
                 episode_step = 0
                 episode_reward = 0
-                
+
+            # try to evaluate
+            if eval_every_step(self.global_step):
+                self.logger.log('eval_total_time', self.timer.total_time(),
+                                self.global_frame)
+                self.eval()
+
+            meta = self.agent.update_meta(meta, self.global_step, time_step)
+            
+            # sample action
+            with torch.no_grad(), utils.eval_mode(self.agent):
+                action = self.agent.act(time_step.observation,
+                                        meta,
+                                        self.global_step,
+                                        eval_mode=False)
+            
+            if not seed_until_step(self.global_step):
+                metrics = self.agent.update(self.replay_iter, self.global_step)
+                self.logger.log_metrics(metrics, self.global_frame, ty='train')
+            
+            # take env step
+            time_step = self.train_env.step(action)
+            episode_reward += time_step.reward
+            if time_step.step_type == dmc.StepType.LAST:
+                print(time_step.step_type)
+            self.replay_storage.add(time_step, meta)
+            self.train_video_recorder.record(time_step.observation)
+            episode_step += 1
+            self._global_step += 1
+
+            # print(f'observation: {time_step.observation}')
+            # print(f'action: {time_step.action}')
+            # print(f'reward: {time_step.reward}')
+            # print(f'discount: {time_step.discount}')
+            # print(f'meta: {meta}')
 
     
     def load_snapshot(self):
@@ -159,6 +221,8 @@ class Workspace:
         def try_load(seed):
             snapshot = snapshot_dir / str(
                 seed) / f'snapshot_{self.cfg.snapshot_ts}.pt'
+            print(f'snapshot is: {snapshot}')
+            print(f'snapshot exists: {snapshot.exists()}')
             if not snapshot.exists():
                 return None
             with snapshot.open('rb') as f:
@@ -180,12 +244,13 @@ class Workspace:
 @hydra.main(config_path='.', config_name='sampling')
 def main(cfg):
     from sampling import Workspace as W
-    root_dir = Path.cwd()
+    # root_dir = Path.cwd()
     workspace = W(cfg)
-    snapshot = root_dir / 'snapshot.pt'
-    if snapshot.exists():
-        print(f'resuming: {snapshot}')
-        workspace.load_snapshot()
+    # snapshot = root_dir / 'snapshot.pt'
+    # print(f'snapshot is: {snapshot}')
+    # if snapshot.exists():
+    #     print(f'resuming: {snapshot}')
+    #     workspace.load_snapshot()
     workspace.train()
 
 if __name__=='__main__':
