@@ -187,6 +187,8 @@ class Workspace:
 
             meta = self.agent.update_meta(meta, self.global_step, time_step)
 
+            print(f"meta is: {np.where(meta['skill'] == 1)}")
+
             # if hasattr(self.agent, "regress_meta"):
             #     repeat = self.cfg.action_repeat
             #     every = self.agent.update_task_every_step // repeat
@@ -224,7 +226,6 @@ class Workspace:
         def try_load(seed):
             snapshot = snapshot_dir / str(
                 seed) / f'snapshot_{self.cfg.snapshot_ts}.pt'
-            print(f'snapshot is: {snapshot}')
             print(f'snapshot exists: {snapshot.exists()}')
             if not snapshot.exists():
                 return None
