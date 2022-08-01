@@ -16,6 +16,8 @@ num_seed_frames: 4000
 # eval
 eval_every_frames: 10000
 num_eval_episodes: 10
+# sample settings
+num_sample_episodes: 2000010
 # pretrained
 snapshot_ts: 100000
 snapshot_base_dir: ./../../../pretrained_models
