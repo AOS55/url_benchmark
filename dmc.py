@@ -1,6 +1,7 @@
 from collections import OrderedDict, deque
 from typing import Any, NamedTuple
 
+import gym
 import dm_env
 import numpy as np
 from dm_control import manipulation, suite
@@ -8,6 +9,7 @@ from dm_control.suite.wrappers import action_scale, pixels
 from dm_env import StepType, specs
 
 import custom_dmc_tasks as cdmc
+from wrappers.gym_wrapper import GymWrapper
 
 
 class ExtendedTimeStep(NamedTuple):
@@ -271,6 +273,13 @@ def _make_jaco(obs_type, domain, task, frame_stack, action_repeat, seed):
     env = FlattenJacoObservationWrapper(env)
     return env
 
+def _make_gym(obs_type, domain, task, frame_stack, action_repeat, seed):
+    env = gym.make(domain)
+    env = GymWrapper(env)
+    env = ActionDTypeWrapper(env, np.float32)
+    env = ActionRepeatWrapper(env, action_repeat)
+    return env
+
 
 def _make_dmc(obs_type, domain, task, frame_stack, action_repeat, seed):
     visualize_reward = False
@@ -286,7 +295,6 @@ def _make_dmc(obs_type, domain, task, frame_stack, action_repeat, seed):
                         task_kwargs=dict(random=seed),
                         environment_kwargs=dict(flat_observation=True),
                         visualize_reward=visualize_reward)
-
     env = ActionDTypeWrapper(env, np.float32)
     env = ActionRepeatWrapper(env, action_repeat)
     if obs_type == 'pixels':
@@ -301,17 +309,34 @@ def _make_dmc(obs_type, domain, task, frame_stack, action_repeat, seed):
 
 def make(name, obs_type, frame_stack, action_repeat, seed):
     assert obs_type in ['states', 'pixels']
-    domain, task = name.split('_', 1)
+    if '_' in name:
+        domain, task = name.split('_', 1)
+    else:
+        domain = name
+        task = 'default'
     domain = dict(cup='ball_in_cup').get(domain, domain)
 
-    make_fn = _make_jaco if domain == 'jaco' else _make_dmc
+    gym_envs = ['MountainCarContinuous-v0', 'BipedalWalker-v3', 'CarRacing-v2', 'LunarLander-v2']
+
+    if domain == 'jaco':
+        make_fn = _make_jaco 
+    elif domain in gym_envs:
+        make_fn = _make_gym
+    else:
+        make_fn = _make_dmc
     env = make_fn(obs_type, domain, task, frame_stack, action_repeat, seed)
 
-    if obs_type == 'pixels':
-        env = FrameStackWrapper(env, frame_stack)
+    if domain in gym_envs:
+        # env = ObservationDTypeWrapper(env, np.float32)
+        env = action_scale.Wrapper(env, minimum=-1.0, maximum=+1.0)
+        env = ExtendedTimeStepWrapper(env)
     else:
-        env = ObservationDTypeWrapper(env, np.float32)
-
-    env = action_scale.Wrapper(env, minimum=-1.0, maximum=+1.0)
-    env = ExtendedTimeStepWrapper(env)
+        if obs_type == 'pixels':
+            env = FrameStackWrapper(env, frame_stack)
+        else:
+            env = ObservationDTypeWrapper(env, np.float32)
+        
+        env = action_scale.Wrapper(env, minimum=-1.0, maximum=+1.0)
+        env = ExtendedTimeStepWrapper(env)
+    
     return env
